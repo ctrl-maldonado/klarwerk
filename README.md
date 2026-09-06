@@ -18,14 +18,15 @@ Voraussetzungen: Node 20+, Docker (für PostgreSQL).
 
 ```bash
 npm install
-cp .env.example .env
-# ENCRYPTION_KEY und SESSION_SECRET setzen:
-#   openssl rand -base64 48
+npm run setup          # .env anlegen, Geheimnisse erzeugen
 npm run db:up          # PostgreSQL und Redis starten
 npm run db:push        # Datenmodell anlegen
 npm run db:seed        # Demo-Betrieb mit Kunden, Aufträgen und Anfragen
 npm run dev
 ```
+
+Ein API-Schlüssel wird nicht gebraucht: ohne Schlüssel läuft Klarwerk im
+gekennzeichneten Demo-Modus (siehe *Ohne KI-Modell*).
 
 Anmeldung im Demo-Betrieb *Muster Heizungs- & Sanitär GmbH*:
 
