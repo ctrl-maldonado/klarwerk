@@ -1,0 +1,1100 @@
+// Klarwerk – Datenmodell
+// Grundregel: Jeder mandantenbezogene Datensatz trägt eine tenantId.
+// Der Zugriff erfolgt ausschließlich über den Tenant-Scope in src/lib/tenant-db.ts.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ───────────────────────────── Enums ─────────────────────────────
+
+enum AutomationLevel {
+  SAFE // AI schlägt nur vor
+  ASSISTED // AI führt nach Freigabe aus
+  AUTOMATIC // AI führt definierte Aktionen selbstständig aus
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  EXECUTED
+  FAILED
+  EXPIRED
+}
+
+enum Priority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum CustomerType {
+  PERSON
+  COMPANY
+}
+
+enum EmailDirection {
+  INBOUND
+  OUTBOUND
+}
+
+enum EmailStatus {
+  RECEIVED // im Posteingang, noch nicht verarbeitet
+  PROCESSING // AI-Analyse läuft
+  NEEDS_APPROVAL // wartet auf Freigabe
+  PROCESSED // automatisch verarbeitet
+  HANDLED // manuell bearbeitet
+  FAILED // Verarbeitung fehlgeschlagen
+  DRAFT // ausgehender Entwurf
+  SENT
+}
+
+enum AppointmentStatus {
+  PROPOSED
+  CONFIRMED
+  CANCELLED
+  DONE
+}
+
+enum TaskStatus {
+  OPEN
+  IN_PROGRESS
+  DONE
+  CANCELLED
+}
+
+enum WorkflowTriggerType {
+  EMAIL_RECEIVED
+  ORDER_CREATED
+  APPOINTMENT_CHANGED
+  DOCUMENT_UPLOADED
+  MANUAL
+  SCHEDULE
+}
+
+enum WorkflowRunStatus {
+  RUNNING
+  WAITING_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AIExecutionStatus {
+  SUCCESS
+  FAILED
+  SKIPPED
+}
+
+enum ActorType {
+  USER
+  AI
+  SYSTEM
+  INTEGRATION
+}
+
+enum IntegrationType {
+  EMAIL
+  CALENDAR
+  CRM
+  ERP
+  ACCOUNTING
+  MESSAGING
+  TELEPHONY
+}
+
+enum IntegrationStatus {
+  DISCONNECTED
+  CONNECTED
+  ERROR
+  EXPIRED
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  DEAD
+}
+
+enum CustomFieldType {
+  TEXT
+  NUMBER
+  DATE
+  BOOLEAN
+  SELECT
+  MULTISELECT
+  TEXTAREA
+}
+
+enum SubscriptionPlan {
+  TRIAL
+  STARTER
+  BUSINESS
+  PRO
+}
+
+enum SubscriptionStatus {
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+}
+
+enum NotificationLevel {
+  INFO
+  WARNING
+  URGENT
+}
+
+enum DocumentSource {
+  UPLOAD
+  EMAIL_ATTACHMENT
+  GENERATED
+}
+
+// ───────────────────────────── Tenant & Organisation ─────────────────────────────
+
+model Tenant {
+  id            String  @id @default(cuid())
+  name          String
+  slug          String  @unique
+  industryKey   String  @default("other")
+  street        String?
+  zip           String?
+  city          String?
+  country       String  @default("DE")
+  phone         String?
+  email         String?
+  website       String?
+  employeeCount Int?
+  timezone      String  @default("Europe/Berlin")
+  locale        String  @default("de-DE")
+
+  automationLevel     AutomationLevel @default(SAFE)
+  onboardingStep      Int             @default(1)
+  onboardingCompleted Boolean         @default(false)
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  settings          TenantSettings?
+  users             User[]
+  roles             Role[]
+  employees         Employee[]
+  absences          Absence[]
+  businessHours     BusinessHour[]
+  customers         Customer[]
+  orders            Order[]
+  orderStatuses     OrderStatus[]
+  appointments      Appointment[]
+  emails            Email[]
+  emailCategories   EmailCategory[]
+  documents         Document[]
+  tasks             Task[]
+  workflows         Workflow[]
+  workflowRuns      WorkflowRun[]
+  aiActions         AIAction[]
+  aiExecutions      AIExecution[]
+  aiProviders       AIProviderConfig[]
+  approvals         ApprovalRequest[]
+  integrations      Integration[]
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  subscription      Subscription?
+  usageRecords      UsageRecord[]
+  industryProfiles  IndustryProfile[]
+  customFields      CustomField[]
+  customFieldValues CustomFieldValue[]
+  promptTemplates   PromptTemplate[]
+  evaluationCases   EvaluationCase[]
+  jobs              Job[]
+  webhookEndpoints  WebhookEndpoint[]
+  apiKeys           ApiKey[]
+  supportGrants     SupportAccessGrant[]
+}
+
+model TenantSettings {
+  id       String @id @default(cuid())
+  tenantId String @unique
+  tenant   Tenant @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  // Kommunikation
+  emailTone      String @default("professional") // professional | friendly | short | casual
+  emailSignature String @default("")
+  companyVoice   String @default("")
+  language       String @default("de")
+
+  // AI-Vertrauensschwellen (§32) – unterhalb dieser Werte: manuelle Prüfung
+  minConfidenceCustomerMatch Float @default(0.85)
+  minConfidenceCategory      Float @default(0.75)
+  minConfidencePriority      Float @default(0.7)
+  minConfidenceExtraction    Float @default(0.7)
+
+  // Risiko-/Freigabepolitik (§17), pro Risikostufe konfigurierbar
+  approvalPolicy Json @default("{\"LOW\":\"auto\",\"MEDIUM\":\"approve\",\"HIGH\":\"approve\"}")
+
+  // Datenschutz (§30)
+  retentionDaysEmails     Int     @default(1095)
+  retentionDaysAuditLogs  Int     @default(2555)
+  shareCustomerDataWithAI Boolean @default(true)
+  aiTrainingOptOut        Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model BusinessHour {
+  id        String  @id @default(cuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  weekday   Int // 0 = Sonntag … 6 = Samstag
+  startTime String // "08:00"
+  endTime   String // "17:00"
+  isClosed  Boolean @default(false)
+
+  @@unique([tenantId, weekday])
+  @@index([tenantId])
+}
+
+// ───────────────────────────── Benutzer & Rechte ─────────────────────────────
+
+model Role {
+  id          String   @id @default(cuid())
+  tenantId    String? // null = Systemvorlage
+  tenant      Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key         String // owner | admin | office_manager | employee | technician
+  name        String
+  description String   @default("")
+  permissions String[] // z.B. ["customers:write", "ai:approve"]
+  isSystem    Boolean  @default(false)
+  users       User[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model User {
+  id              String    @id @default(cuid())
+  tenantId        String?
+  tenant          Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  email           String
+  passwordHash    String
+  name            String
+  roleId          String?
+  role            Role?     @relation(fields: [roleId], references: [id])
+  isActive        Boolean   @default(true)
+  isPlatformAdmin Boolean   @default(false)
+  lastLoginAt     DateTime?
+  failedLogins    Int       @default(0)
+  lockedUntil     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  deletedAt       DateTime?
+
+  sessions       Session[]
+  employee       Employee?
+  notifications  Notification[]
+  auditLogs      AuditLog[]
+  approvals      ApprovalRequest[]    @relation("ApprovalDecider")
+  tasks          Task[]
+  documents      Document[]
+  apiKeys        ApiKey[]
+  supportGrants  SupportAccessGrant[] @relation("SupportGrantAdmin")
+  grantedSupport SupportAccessGrant[] @relation("SupportGrantIssuer")
+
+  @@unique([email])
+  @@index([tenantId])
+}
+
+model Session {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+  ip        String?
+  userAgent String?
+
+  @@index([userId])
+}
+
+model Employee {
+  id           String   @id @default(cuid())
+  tenantId     String
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId       String?  @unique
+  user         User?    @relation(fields: [userId], references: [id])
+  firstName    String
+  lastName     String
+  email        String?
+  phone        String?
+  jobTitle     String   @default("")
+  skills       String[] // Qualifikationen für die AI-Terminplanung
+  regions      String[] // Postleitzahl-Präfixe o. Ä.
+  color        String   @default("#2563eb")
+  isActive     Boolean  @default(true)
+  isTechnician Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  appointments Appointment[]
+  orders       Order[]       @relation("OrderTechnician")
+  absences     Absence[]
+
+  @@index([tenantId])
+}
+
+model Absence {
+  id         String   @id @default(cuid())
+  tenantId   String
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  start      DateTime
+  end        DateTime
+  reason     String   @default("Urlaub")
+
+  @@index([tenantId, employeeId])
+}
+
+// ───────────────────────────── Kunden ─────────────────────────────
+
+model Customer {
+  id             String       @id @default(cuid())
+  tenantId       String
+  tenant         Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customerNumber String
+  type           CustomerType @default(PERSON)
+  companyName    String?
+  firstName      String?
+  lastName       String?
+  email          String?
+  phone          String?
+  street         String?
+  zip            String?
+  city           String?
+  country        String       @default("DE")
+  notes          String       @default("")
+  tags           String[]
+  source         String       @default("manual")
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  contacts     CustomerContact[]
+  orders       Order[]
+  appointments Appointment[]
+  emails       Email[]
+  documents    Document[]
+  tasks        Task[]
+
+  @@unique([tenantId, customerNumber])
+  @@index([tenantId])
+  @@index([tenantId, email])
+  @@index([tenantId, lastName])
+}
+
+model CustomerContact {
+  id         String   @id @default(cuid())
+  tenantId   String
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  name       String
+  email      String?
+  phone      String?
+  role       String   @default("")
+  isPrimary  Boolean  @default(false)
+
+  @@index([tenantId, customerId])
+}
+
+// ───────────────────────────── Aufträge ─────────────────────────────
+
+model OrderStatus {
+  id         String  @id @default(cuid())
+  tenantId   String
+  tenant     Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key        String
+  label      String
+  color      String  @default("#64748b")
+  sortOrder  Int     @default(0)
+  isDefault  Boolean @default(false)
+  isTerminal Boolean @default(false)
+  orders     Order[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderNumber   String
+  customerId    String?
+  customer      Customer?   @relation(fields: [customerId], references: [id])
+  title         String
+  description   String      @default("")
+  categoryKey   String      @default("other")
+  priority      Priority    @default(NORMAL)
+  statusId      String
+  status        OrderStatus @relation(fields: [statusId], references: [id])
+  technicianId  String?
+  technician    Employee?   @relation("OrderTechnician", fields: [technicianId], references: [id])
+  aiSummary     String?
+  aiConfidence  Float?
+  createdByAI   Boolean     @default(false)
+  sourceEmailId String?
+  street        String?
+  zip           String?
+  city          String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+  closedAt      DateTime?
+  deletedAt     DateTime?
+
+  appointments Appointment[]
+  emails       Email[]
+  documents    Document[]
+  tasks        Task[]
+
+  @@unique([tenantId, orderNumber])
+  @@index([tenantId])
+  @@index([tenantId, statusId])
+  @@index([tenantId, customerId])
+}
+
+// ───────────────────────────── Kalender ─────────────────────────────
+
+model Appointment {
+  id            String            @id @default(cuid())
+  tenantId      String
+  tenant        Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  orderId       String?
+  order         Order?            @relation(fields: [orderId], references: [id])
+  customerId    String?
+  customer      Customer?         @relation(fields: [customerId], references: [id])
+  employeeId    String?
+  employee      Employee?         @relation(fields: [employeeId], references: [id])
+  title         String
+  start         DateTime
+  end           DateTime
+  status        AppointmentStatus @default(PROPOSED)
+  location      String?
+  notes         String            @default("")
+  travelMinutes Int               @default(0)
+  createdByAI   Boolean           @default(false)
+  externalId    String?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  @@index([tenantId])
+  @@index([tenantId, start])
+  @@index([tenantId, employeeId, start])
+}
+
+// ───────────────────────────── E-Mail ─────────────────────────────
+
+model EmailCategory {
+  id        String  @id @default(cuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key       String
+  label     String
+  color     String  @default("#64748b")
+  sortOrder Int     @default(0)
+  isSystem  Boolean @default(false)
+  aiHint    String  @default("")
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model Email {
+  id            String         @id @default(cuid())
+  tenantId      String
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  integrationId String?
+  integration   Integration?   @relation(fields: [integrationId], references: [id])
+  externalId    String?
+  threadId      String?
+  direction     EmailDirection @default(INBOUND)
+  status        EmailStatus    @default(RECEIVED)
+  fromName      String         @default("")
+  fromEmail     String
+  toEmails      String[]
+  ccEmails      String[]
+  subject       String         @default("")
+  bodyText      String         @default("")
+  bodyHtml      String?
+  receivedAt    DateTime       @default(now())
+  sentAt        DateTime?
+  isRead        Boolean        @default(false)
+
+  categoryKey        String?
+  categoryConfidence Float?
+  priority           Priority?
+  aiSummary          String?
+  processingError    String?
+
+  customerId String?
+  customer   Customer? @relation(fields: [customerId], references: [id])
+  orderId    String?
+  order      Order?    @relation(fields: [orderId], references: [id])
+  replyToId  String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  attachments EmailAttachment[]
+
+  @@unique([tenantId, externalId])
+  @@index([tenantId, status])
+  @@index([tenantId, receivedAt])
+  @@index([tenantId, customerId])
+}
+
+model EmailAttachment {
+  id         String  @id @default(cuid())
+  tenantId   String
+  emailId    String
+  email      Email   @relation(fields: [emailId], references: [id], onDelete: Cascade)
+  filename   String
+  mimeType   String
+  size       Int     @default(0)
+  documentId String?
+
+  @@index([tenantId, emailId])
+}
+
+// ───────────────────────────── Dokumente & Aufgaben ─────────────────────────────
+
+model Document {
+  id            String         @id @default(cuid())
+  tenantId      String
+  tenant        Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  filename      String
+  mimeType      String
+  size          Int            @default(0)
+  storageKey    String
+  source        DocumentSource @default(UPLOAD)
+  customerId    String?
+  customer      Customer?      @relation(fields: [customerId], references: [id])
+  orderId       String?
+  order         Order?         @relation(fields: [orderId], references: [id])
+  uploadedById  String?
+  uploadedBy    User?          @relation(fields: [uploadedById], references: [id])
+  extractedText String?
+  aiExtraction  Json?
+  aiConfidence  Float?
+  createdAt     DateTime       @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, customerId])
+}
+
+model Task {
+  id             String     @id @default(cuid())
+  tenantId       String
+  tenant         Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title          String
+  description    String     @default("")
+  status         TaskStatus @default(OPEN)
+  priority       Priority   @default(NORMAL)
+  dueAt          DateTime?
+  assignedUserId String?
+  assignedUser   User?      @relation(fields: [assignedUserId], references: [id])
+  customerId     String?
+  customer       Customer?  @relation(fields: [customerId], references: [id])
+  orderId        String?
+  order          Order?     @relation(fields: [orderId], references: [id])
+  createdByAI    Boolean    @default(false)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([tenantId, status])
+}
+
+// ───────────────────────────── Workflows / Automationen ─────────────────────────────
+
+model Workflow {
+  id          String              @id @default(cuid())
+  tenantId    String
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key         String
+  name        String
+  description String              @default("")
+  trigger     WorkflowTriggerType
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  steps WorkflowStep[]
+  runs  WorkflowRun[]
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model WorkflowStep {
+  id              String   @id @default(cuid())
+  tenantId        String
+  workflowId      String
+  workflow        Workflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  sortOrder       Int
+  type            String // "condition" | "action"
+  actionKey       String? // referenziert eine registrierte AI-Aktion / System-Aktion
+  condition       Json? // { field, operator, value }
+  config          Json     @default("{}")
+  label           String   @default("")
+  continueOnError Boolean  @default(false)
+
+  @@index([workflowId])
+}
+
+model WorkflowRun {
+  id          String              @id @default(cuid())
+  tenantId    String
+  tenant      Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  workflowId  String
+  workflow    Workflow            @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  status      WorkflowRunStatus   @default(RUNNING)
+  triggerType WorkflowTriggerType
+  triggerRef  String?
+  context     Json                @default("{}")
+  log         Json                @default("[]")
+  error       String?
+  startedAt   DateTime            @default(now())
+  finishedAt  DateTime?
+
+  approvals ApprovalRequest[]
+
+  @@index([tenantId, status])
+}
+
+// ───────────────────────────── AI ─────────────────────────────
+
+model AIProviderConfig {
+  id              String   @id @default(cuid())
+  tenantId        String
+  tenant          Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  providerKey     String // openai | anthropic | google | local | mock
+  name            String
+  model           String
+  baseUrl         String?
+  encryptedApiKey String?
+  isDefault       Boolean  @default(false)
+  isEnabled       Boolean  @default(true)
+  // §31: Welche Daten gehen an diesen Provider?
+  dataScope       Json     @default("{\"emailContent\":true,\"customerData\":true,\"paymentData\":false,\"attachments\":false}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  executions AIExecution[]
+
+  @@unique([tenantId, providerKey])
+  @@index([tenantId])
+}
+
+/// Katalog der Tools, die die AI ausführen darf (§18). Kein direkter DB-Zugriff.
+model AIAction {
+  id                 String    @id @default(cuid())
+  tenantId           String?
+  tenant             Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key                String
+  name               String
+  description        String    @default("")
+  riskLevel          RiskLevel @default(MEDIUM)
+  requiresApproval   Boolean   @default(true)
+  requiredPermission String    @default("")
+  isEnabled          Boolean   @default(true)
+
+  @@unique([tenantId, key])
+  @@index([tenantId])
+}
+
+model AIExecution {
+  id              String            @id @default(cuid())
+  tenantId        String
+  tenant          Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  providerId      String?
+  provider        AIProviderConfig? @relation(fields: [providerId], references: [id])
+  providerKey     String
+  model           String
+  taskKey         String // email_classify | order_extract | reply_draft | …
+  promptVersionId String?
+  promptVersion   PromptVersion?    @relation(fields: [promptVersionId], references: [id])
+  status          AIExecutionStatus @default(SUCCESS)
+  confidence      Float?
+  latencyMs       Int               @default(0)
+  inputTokens     Int               @default(0)
+  outputTokens    Int               @default(0)
+  costMicroCents  Int               @default(0)
+  isDemo          Boolean           @default(false)
+  error           String?
+  entityType      String?
+  entityId        String?
+  requestSummary  String            @default("")
+  responseData    Json?
+  createdAt       DateTime          @default(now())
+
+  auditLogs AuditLog[]
+
+  @@index([tenantId, createdAt])
+  @@index([tenantId, taskKey])
+}
+
+/// Freigaben (§8, §17): jede Aktion mit Risiko wartet hier auf einen Menschen.
+model ApprovalRequest {
+  id              String         @id @default(cuid())
+  tenantId        String
+  tenant          Tenant         @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  title           String
+  summary         String         @default("")
+  riskLevel       RiskLevel      @default(MEDIUM)
+  status          ApprovalStatus @default(PENDING)
+  /// Liste geplanter Tool-Aufrufe: [{ actionKey, args, label, confidence }]
+  proposedActions Json           @default("[]")
+  context         Json           @default("{}")
+  sourceType      String? // email | document | chat | workflow
+  sourceId        String?
+  workflowRunId   String?
+  workflowRun     WorkflowRun?   @relation(fields: [workflowRunId], references: [id])
+  decidedById     String?
+  decidedBy       User?          @relation("ApprovalDecider", fields: [decidedById], references: [id])
+  decidedAt       DateTime?
+  decisionNote    String?
+  executionResult Json?
+  expiresAt       DateTime?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@index([tenantId, status])
+}
+
+model PromptTemplate {
+  id          String  @id @default(cuid())
+  tenantId    String?
+  tenant      Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key         String // email_classifier | customer_extractor | …
+  name        String
+  description String  @default("")
+  taskKey     String
+
+  versions PromptVersion[]
+
+  @@unique([tenantId, key])
+}
+
+model PromptVersion {
+  id           String         @id @default(cuid())
+  templateId   String
+  template     PromptTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  version      Int
+  systemPrompt String
+  userTemplate String
+  jsonSchema   Json?
+  model        String         @default("")
+  isActive     Boolean        @default(false)
+  notes        String         @default("")
+  qualityScore Float? // aus dem Evaluation-System (§33)
+  errorCount   Int            @default(0)
+  createdAt    DateTime       @default(now())
+
+  executions AIExecution[]
+  evalRuns   EvaluationRun[]
+
+  @@unique([templateId, version])
+}
+
+model EvaluationCase {
+  id        String   @id @default(cuid())
+  tenantId  String?
+  tenant    Tenant?  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  taskKey   String
+  name      String
+  input     Json
+  expected  Json
+  tags      String[]
+  createdAt DateTime @default(now())
+
+  runs EvaluationRun[]
+}
+
+model EvaluationRun {
+  id              String         @id @default(cuid())
+  caseId          String
+  case            EvaluationCase @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  promptVersionId String?
+  promptVersion   PromptVersion? @relation(fields: [promptVersionId], references: [id])
+  model           String
+  passed          Boolean
+  actual          Json
+  diff            Json?
+  createdAt       DateTime       @default(now())
+
+  @@index([caseId])
+}
+
+// ───────────────────────────── Branchen & Custom Fields ─────────────────────────────
+
+model IndustryProfile {
+  id       String  @id @default(cuid())
+  tenantId String? // null = mitgeliefertes Systemprofil
+  tenant   Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key      String
+  name     String
+  isSystem Boolean @default(false)
+
+  terminology     Json @default("{}")
+  orderCategories Json @default("[]")
+  priorityRules   Json @default("[]")
+  fields          Json @default("[]")
+  emailTemplates  Json @default("[]")
+  aiInstructions  Json @default("[]")
+  emailCategories Json @default("[]")
+  orderStatuses   Json @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([tenantId, key])
+}
+
+model CustomField {
+  id         String          @id @default(cuid())
+  tenantId   String
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  entityType String // customer | order | appointment
+  key        String
+  label      String
+  type       CustomFieldType @default(TEXT)
+  options    String[]
+  isRequired Boolean         @default(false)
+  sortOrder  Int             @default(0)
+  aiHint     String          @default("") // hilft der Extraktion
+
+  values CustomFieldValue[]
+
+  @@unique([tenantId, entityType, key])
+  @@index([tenantId])
+}
+
+model CustomFieldValue {
+  id            String      @id @default(cuid())
+  tenantId      String
+  tenant        Tenant      @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  customFieldId String
+  customField   CustomField @relation(fields: [customFieldId], references: [id], onDelete: Cascade)
+  entityType    String
+  entityId      String
+  value         Json
+
+  @@unique([customFieldId, entityId])
+  @@index([tenantId, entityType, entityId])
+}
+
+// ───────────────────────────── Integrationen ─────────────────────────────
+
+model Integration {
+  id                   String            @id @default(cuid())
+  tenantId             String
+  tenant               Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  providerKey          String // microsoft365 | google | imap | demo
+  type                 IntegrationType
+  status               IntegrationStatus @default(DISCONNECTED)
+  accountEmail         String?
+  displayName          String            @default("")
+  scopes               String[]
+  encryptedCredentials String?
+  config               Json              @default("{}")
+  lastSyncAt           DateTime?
+  lastError            String?
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
+
+  emails Email[]
+
+  @@unique([tenantId, providerKey, type])
+  @@index([tenantId])
+}
+
+// ───────────────────────────── Audit, Benachrichtigungen, Jobs ─────────────────────────────
+
+model AuditLog {
+  id                String       @id @default(cuid())
+  tenantId          String?
+  tenant            Tenant?      @relation(fields: [tenantId], references: [id])
+  at                DateTime     @default(now())
+  actorType         ActorType
+  actorUserId       String?
+  actorUser         User?        @relation(fields: [actorUserId], references: [id])
+  actorLabel        String       @default("")
+  action            String
+  entityType        String?
+  entityId          String?
+  result            String       @default("success")
+  details           Json         @default("{}")
+  aiExecutionId     String?
+  aiExecution       AIExecution? @relation(fields: [aiExecutionId], references: [id])
+  approvalRequestId String?
+  approvedByLabel   String?
+  ip                String?
+
+  @@index([tenantId, at])
+  @@index([tenantId, entityType, entityId])
+}
+
+model Notification {
+  id        String            @id @default(cuid())
+  tenantId  String
+  tenant    Tenant            @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  userId    String?
+  user      User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  level     NotificationLevel @default(INFO)
+  title     String
+  body      String            @default("")
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime          @default(now())
+
+  @@index([tenantId, userId, readAt])
+}
+
+model Job {
+  id             String    @id @default(cuid())
+  tenantId       String?
+  tenant         Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  key            String
+  payload        Json      @default("{}")
+  status         JobStatus @default(PENDING)
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(5)
+  runAt          DateTime  @default(now())
+  lockedAt       DateTime?
+  lockedBy       String?
+  lastError      String?
+  idempotencyKey String?   @unique
+  createdAt      DateTime  @default(now())
+  finishedAt     DateTime?
+
+  @@index([status, runAt])
+  @@index([tenantId])
+}
+
+model WebhookEndpoint {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  url       String
+  events    String[]
+  secret    String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  deliveries WebhookDelivery[]
+
+  @@index([tenantId])
+}
+
+model WebhookDelivery {
+  id             String          @id @default(cuid())
+  tenantId       String
+  endpointId     String
+  endpoint       WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Cascade)
+  event          String
+  payload        Json
+  attempts       Int             @default(0)
+  responseStatus Int?
+  error          String?
+  deliveredAt    DateTime?
+  createdAt      DateTime        @default(now())
+
+  @@index([tenantId, endpointId])
+}
+
+model ApiKey {
+  id          String    @id @default(cuid())
+  tenantId    String
+  tenant      Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  name        String
+  prefix      String
+  keyHash     String    @unique
+  scopes      String[]
+  createdById String?
+  createdBy   User?     @relation(fields: [createdById], references: [id])
+  lastUsedAt  DateTime?
+  revokedAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([tenantId])
+}
+
+// ───────────────────────────── Billing ─────────────────────────────
+
+model Subscription {
+  id                   String             @id @default(cuid())
+  tenantId             String             @unique
+  tenant               Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  plan                 SubscriptionPlan   @default(TRIAL)
+  status               SubscriptionStatus @default(TRIALING)
+  seats                Int                @default(3)
+  priceCentsPerMonth   Int                @default(0)
+  currentPeriodStart   DateTime           @default(now())
+  currentPeriodEnd     DateTime?
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  /// Konfigurierbare Limits, z.B. { "emails": 2000, "aiCalls": 5000, "users": 5 }
+  limits               Json               @default("{}")
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+}
+
+model UsageRecord {
+  id        String   @id @default(cuid())
+  tenantId  String
+  tenant    Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  metric    String // ai_calls | emails_processed | documents | automations | users
+  quantity  Int      @default(1)
+  periodKey String // "2026-09"
+  meta      Json     @default("{}")
+  at        DateTime @default(now())
+
+  @@index([tenantId, metric, periodKey])
+}
+
+/// §36: Support-Zugriff eines Plattform-Admins – befristet und protokolliert.
+model SupportAccessGrant {
+  id              String    @id @default(cuid())
+  tenantId        String
+  tenant          Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  platformAdminId String
+  platformAdmin   User      @relation("SupportGrantAdmin", fields: [platformAdminId], references: [id])
+  grantedById     String?
+  grantedBy       User?     @relation("SupportGrantIssuer", fields: [grantedById], references: [id])
+  reason          String
+  expiresAt       DateTime
+  revokedAt       DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([tenantId])
+}
